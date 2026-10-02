@@ -1,0 +1,92 @@
+/* =========================
+   Global Reset
+========================= */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* =========================
+   HTML & Body
+========================= */
+
+html {
+  scroll-behavior: smooth;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+}
+
+body {
+  font-family: "Segoe UI", sans-serif;
+  background: #fdf6e3;
+  overflow-x: hidden;
+  color: #222;
+}
+
+
+/* =========================
+   Images
+========================= */
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+/* =========================
+   Common Container
+========================= */
+
+.container{
+    width:min(1200px,92%);
+    margin:auto;
+}
+/* =========================
+   Menu Page
+========================= */
+
+.menu-grid {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 25px;
+  padding: 40px 20px;
+}
+
+.menu-item {
+  width: 260px;
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 25px rgba(0,0,0,.08);
+  padding: 20px;
+  text-align: center;
+  transition: .3s;
+}
+
+.menu-item:hover {
+  transform: translateY(-8px);
+}
+
+.price {
+  margin-top: 10px;
+  color: #228B22;
+  font-size: 1.2rem;
+  font-weight: bold;
+}
+
+/* =========================
+   Contact
+========================= */
+
+.contact {
+  text-align: center;
+  padding: 80px 20px;
+}

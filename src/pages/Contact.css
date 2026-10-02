@@ -1,0 +1,47 @@
+.contact {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 30px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+  text-align: center;
+}
+
+.contact h2 {
+  font-size: 2rem;
+  margin-bottom: 20px;
+  color: #34a853; /* elegant green accent */
+}
+
+.contact p {
+  font-size: 1.1rem;
+  margin: 8px 0;
+  color: #333;
+}
+
+.contact iframe {
+  margin-top: 20px;
+  border-radius: 8px;
+  width: 100%;
+  height: 300px;
+  border: none;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+/* Responsive design */
+@media (max-width: 600px) {
+  .contact {
+    padding: 20px;
+  }
+
+  .contact h2 {
+    font-size: 1.5rem;
+  }
+
+  .contact p {
+    font-size: 1rem;
+  }
+}
+
+
