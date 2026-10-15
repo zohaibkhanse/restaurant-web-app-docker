@@ -1,5 +1,5 @@
 
-name: Docker Build and Publish
+name: Docker Build, Publish and Deploy
 
 on:
   push:
@@ -8,8 +8,8 @@ on:
       - main
   pull_request:
     branches:
-      - main
       - develop
+      - main
 
 permissions:
   contents: read
@@ -40,9 +40,17 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
 
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        shell: bash
+        run: echo "image_tag=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -61,4 +69,113 @@ jobs:
           push: true
           tags: |
             zohaibkhanse/restaurant-web-app-docker:latest
-            zohaibkhanse/restaurant-web-app-docker:sha-${{ github.sha }}
+            zohaibkhanse/restaurant-web-app-docker:${{ steps.meta.outputs.image_tag }}
+
+  deploy:
+    name: Deploy to AWS EC2
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-latest
+
+    environment: production
+
+    env:
+      DEV_HOST: ${{ secrets.DEV_HOST }}
+      IMAGE: zohaibkhanse/restaurant-web-app-docker:${{ needs.publish.outputs.image_tag }}
+
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/ec2_rsa_key
+          chmod 600 ~/.ssh/ec2_rsa_key
+
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          cat > ~/.ssh/askpass.sh <<'EOF'
+          #!/bin/sh
+          printf '%s\n' "$SSH_PASSPHRASE"
+          EOF
+          chmod 700 ~/.ssh/askpass.sh
+
+          eval "$(ssh-agent -s)"
+
+          export SSH_ASKPASS="$HOME/.ssh/askpass.sh"
+          export SSH_ASKPASS_REQUIRE=force
+          export DISPLAY=:0
+
+          setsid ssh-add ~/.ssh/ec2_rsa_key < /dev/null
+
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+      - name: Deploy image to EC2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh ubuntu@"$DEV_HOST" \
+            "IMAGE='$IMAGE' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          echo "Pulling production image: $IMAGE"
+          sudo docker pull "$IMAGE"
+
+          echo "Starting candidate container"
+          sudo docker rm -f restaurant-web-app-candidate 2>/dev/null || true
+
+          sudo docker run -d \
+            --name restaurant-web-app-candidate \
+            -p 127.0.0.1:80:80 \
+            "$IMAGE"
+
+          for attempt in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:80/ >/dev/null; then
+              echo "Candidate health check passed"
+              break
+            fi
+
+            if [ "$attempt" -eq 15 ]; then
+              sudo docker logs restaurant-web-app-candidate
+              sudo docker rm -f restaurant-web-app-candidate
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          echo "Replacing production container"
+          sudo docker rm -f restaurant-web-app-candidate
+          sudo docker rm -f restaurant-web-app 2>/dev/null || true
+
+          sudo docker run -d \
+            --name restaurant-web-app \
+            --restart unless-stopped \
+            -p 80:80 \
+            "$IMAGE"
+
+          echo "Checking production health"
+          for attempt in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1/ >/dev/null; then
+              echo "Production deployment successful"
+              sudo docker image prune -f
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Production health check failed"
+          sudo docker logs restaurant-web-app
+          exit 1
+          REMOTE
