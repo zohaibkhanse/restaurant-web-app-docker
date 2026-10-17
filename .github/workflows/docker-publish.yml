@@ -99,7 +99,7 @@ jobs:
           printf '%s' "$SSH_PRIVATE_KEY_B64" \
            | base64 --decode > ~/.ssh/ec2_rsa_key
 
-            chmod 600 ~/.ssh/ec2_rsa_key
+          chmod 600 ~/.ssh/ec2_rsa_key
 
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
