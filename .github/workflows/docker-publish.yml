@@ -119,6 +119,7 @@ jobs:
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 
+      
       - name: Deploy image to EC2
         shell: bash
         run: |
@@ -126,56 +127,111 @@ jobs:
 
           ssh ubuntu@"$DEV_HOST" \
             "IMAGE='$IMAGE' bash -s" <<'REMOTE'
-          set -euo pipefail
+          set -Eeuo pipefail
+
+          APP=restaurant-web-app
+          CANDIDATE=restaurant-web-app-candidate
+          BACKUP=restaurant-web-app-rollback
+          PORT=80
 
           echo "Pulling production image: $IMAGE"
           sudo docker pull "$IMAGE"
 
-          echo "Starting candidate container"
-          sudo docker rm -f restaurant-web-app-candidate 2>/dev/null || true
+          # Remember the current production image before changing anything.
+          PREVIOUS_IMAGE=""
+          if sudo docker container inspect "$APP" >/dev/null 2>&1; then
+            PREVIOUS_IMAGE=$(sudo docker inspect \
+              --format='{{.Config.Image}}' "$APP")
+            echo "Previous image: $PREVIOUS_IMAGE"
+          fi
 
+          # Remove stale candidate containers from earlier attempts.
+          sudo docker rm -f "$CANDIDATE" 2>/dev/null || true
+
+          # Test the new image on a temporary, localhost-only port.
+          echo "Starting candidate container"
           sudo docker run -d \
-            --name restaurant-web-app-candidate \
-            -p 127.0.0.1:80:80 \
+            --name "$CANDIDATE" \
+            -p 127.0.0.1:8081:80 \
             "$IMAGE"
 
+          CANDIDATE_OK=false
           for attempt in $(seq 1 15); do
-            if curl -fsS http://127.0.0.1:80/ >/dev/null; then
-              echo "Candidate health check passed"
+            if curl -fsS http://127.0.0.1:8081/ >/dev/null; then
+              CANDIDATE_OK=true
               break
             fi
-
-            if [ "$attempt" -eq 15 ]; then
-              sudo docker logs restaurant-web-app-candidate
-              sudo docker rm -f restaurant-web-app-candidate
-              exit 1
-            fi
-
             sleep 2
           done
 
-          echo "Replacing production container"
-          sudo docker rm -f restaurant-web-app-candidate
-          sudo docker rm -f restaurant-web-app 2>/dev/null || true
+          if [ "$CANDIDATE_OK" != true ]; then
+            echo "Candidate health check failed"
+            sudo docker logs "$CANDIDATE" || true
+            sudo docker rm -f "$CANDIDATE" || true
+            exit 1
+          fi
 
-          sudo docker run -d \
-            --name restaurant-web-app \
+          # Stop the candidate and free its temporary port.
+          sudo docker rm -f "$CANDIDATE"
+
+          # Preserve the previous container until the new one is healthy.
+          sudo docker rm -f "$BACKUP" 2>/dev/null || true
+          if sudo docker container inspect "$APP" >/dev/null 2>&1; then
+            sudo docker rename "$APP" "$BACKUP"
+            sudo docker stop "$BACKUP" >/dev/null || true
+          fi
+
+          # Start the new production container.
+          if ! sudo docker run -d \
+            --name "$APP" \
             --restart unless-stopped \
             -p 80:80 \
-            "$IMAGE"
+            "$IMAGE"; then
+            echo "New production container failed to start"
+            sudo docker rm -f "$APP" 2>/dev/null || true
 
-          echo "Checking production health"
+            if [ -n "$PREVIOUS_IMAGE" ]; then
+              sudo docker rename "$BACKUP" "$APP"
+              sudo docker start "$APP"
+            fi
+            exit 1
+          fi
+
+          # Verify production before discarding the previous container.
+          PRODUCTION_OK=false
           for attempt in $(seq 1 15); do
             if curl -fsS http://127.0.0.1/ >/dev/null; then
-              echo "Production deployment successful"
-              sudo docker image prune -f
-              exit 0
+              PRODUCTION_OK=true
+              break
             fi
-
             sleep 2
           done
 
-          echo "Production health check failed"
-          sudo docker logs restaurant-web-app
-          exit 1
+          if [ "$PRODUCTION_OK" != true ]; then
+            echo "Production health check failed; rolling back"
+            sudo docker logs "$APP" || true
+            sudo docker rm -f "$APP" || true
+
+            if [ -n "$PREVIOUS_IMAGE" ]; then
+              sudo docker rename "$BACKUP" "$APP"
+              sudo docker start "$APP"
+
+              for attempt in $(seq 1 15); do
+                if curl -fsS http://127.0.0.1/ >/dev/null; then
+                  echo "Rollback successful; previous application restored"
+                  exit 1
+                fi
+                sleep 2
+              done
+
+              echo "Rollback container did not pass its health check"
+            else
+              echo "No previous production container was available"
+            fi
+
+            exit 1
+          fi
+
+          echo "Production deployment successful"
+          sudo docker rm -f "$BACKUP" 2>/dev/null || true
           REMOTE
